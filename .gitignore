@@ -1,0 +1,9 @@
+# Sensitive Data
+.env
+*.env
+
+# Dependencies
+node_modules/
+
+# Build Outputs
+dist/
