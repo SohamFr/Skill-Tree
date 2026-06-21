@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { WordsPullUpMultiStyle } from "./WordsPullUpMultiStyle";
 
@@ -41,20 +41,56 @@ interface AnalysisData {
   };
 }
 
+interface AnalyzeSuccessResponse {
+  success: true;
+  data: AnalysisData;
+}
+
+interface AnalyzeErrorResponse {
+  success?: false;
+  error?: string;
+  details?: string;
+}
+
+type AnalyzeResponse = AnalyzeSuccessResponse | AnalyzeErrorResponse | null;
+
 const SkeletonCard: React.FC = () => (
   <div className="bg-[#101010] rounded-2xl h-48 border border-white/5 animate-pulse" />
 );
 
+const parseJsonSafe = <T,>(text: string): T | null => {
+  try {
+    return text ? (JSON.parse(text) as T) : null;
+  } catch {
+    return null;
+  }
+};
+
+const clamp = (value: number, min = 0, max = 100) =>
+  Math.max(min, Math.min(max, value));
+
 export const GitHubAnalyzer: React.FC = () => {
-  const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+  const API_BASE = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AnalysisData | null>(null);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem("lastAnalyzedGithubUsername");
+    if (saved) setUsername(saved);
+  }, []);
+
   const handleAnalyze = async () => {
-    if (!username.trim()) return;
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername) return;
+
+    if (!API_BASE) {
+      setError("Frontend API base URL is not configured.");
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -63,39 +99,44 @@ export const GitHubAnalyzer: React.FC = () => {
     try {
       const res = await fetch(`${API_BASE}/api/github/analyze`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: username.trim() }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ username: trimmedUsername }),
       });
 
       const text = await res.text();
-
-      let json: any = null;
-      try {
-        json = text ? JSON.parse(text) : null;
-      } catch {
-        json = null;
-      }
+      const json = parseJsonSafe<AnalyzeResponse>(text);
 
       if (!res.ok) {
-        setError(json?.error || `Analysis failed (${res.status})`);
+        const message =
+          (json && "error" in json && json.error) ||
+          (json && "details" in json && json.details) ||
+          `Analysis failed (${res.status})`;
+        setError(message);
         return;
       }
 
-      if (!json?.data) {
+      if (!json || !("data" in json) || !json.data) {
         setError("Backend returned an empty or invalid response.");
         return;
       }
 
       setData(json.data);
-      localStorage.setItem(
-        "lastAnalyzedGithubUsername",
-        username.trim().toLowerCase()
-      );
-    } catch (err: any) {
-      if (err.message?.includes("fetch")) {
+
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          "lastAnalyzedGithubUsername",
+          trimmedUsername.toLowerCase()
+        );
+      }
+    } catch (err: unknown) {
+      if (err instanceof TypeError) {
         setError("Cannot connect to backend.");
+      } else if (err instanceof Error) {
+        setError(err.message);
       } else {
-        setError(err.message || "Something went wrong");
+        setError("Something went wrong");
       }
     } finally {
       setLoading(false);
@@ -103,10 +144,12 @@ export const GitHubAnalyzer: React.FC = () => {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") handleAnalyze();
+    if (e.key === "Enter") {
+      void handleAnalyze();
+    }
   };
 
-  const languageStats = () => {
+  const languages = useMemo(() => {
     if (!data) return [];
 
     const freq: Record<string, number> = {};
@@ -127,19 +170,20 @@ export const GitHubAnalyzer: React.FC = () => {
       }))
       .sort((a, b) => b.percent - a.percent)
       .slice(0, 5);
-  };
+  }, [data]);
 
-  const languages = languageStats();
+  const avgComplexity = useMemo(() => {
+    if (!data) return 0;
 
-  const avgComplexity =
-    data && data.repositories.length > 0
-      ? Math.min(
-          (data.repositories.reduce((sum, repo) => sum + repo.complexityScore, 0) /
-            data.repositories.length) *
-            10,
-          100
-        )
-      : (data?.stats.avgComplexityScore ?? 0);
+    if (data.repositories.length > 0) {
+      const average =
+        data.repositories.reduce((sum, repo) => sum + repo.complexityScore, 0) /
+        data.repositories.length;
+      return clamp(average * 10);
+    }
+
+    return clamp(data.stats.avgComplexityScore ?? 0);
+  }, [data]);
 
   return (
     <section
@@ -169,8 +213,7 @@ export const GitHubAnalyzer: React.FC = () => {
           />
 
           <p className="text-gray-500 text-sm md:text-base font-light mb-12">
-            Commits don't lie. Technologies don't lie. We make sure you don't
-            have to.
+            Commits don't lie. Technologies don't lie. We make sure you don't have to.
           </p>
         </div>
 
@@ -196,7 +239,8 @@ export const GitHubAnalyzer: React.FC = () => {
             />
 
             <button
-              onClick={handleAnalyze}
+              type="button"
+              onClick={() => void handleAnalyze()}
               disabled={loading || !username.trim()}
               className="bg-[#DEDBC8] text-black font-semibold text-sm px-6 py-3 rounded-xl hover:bg-white transition-colors disabled:opacity-50"
             >
@@ -275,7 +319,7 @@ export const GitHubAnalyzer: React.FC = () => {
 
                 {data.repositories.slice(0, 5).map((repo, i) => (
                   <div
-                    key={repo.name + i}
+                    key={`${repo.name}-${i}`}
                     className="bg-black/30 rounded-xl p-3 mb-2 border border-white/5"
                   >
                     <div className="flex items-center justify-between mb-1">
@@ -293,15 +337,11 @@ export const GitHubAnalyzer: React.FC = () => {
                     <div className="mt-2 h-0.5 bg-white/5 rounded-full">
                       <div
                         className="h-0.5 bg-[#DEDBC8]/60 rounded-full"
-                        style={{
-                          width: `${Math.min(repo.complexityScore, 100)}%`,
-                        }}
+                        style={{ width: `${clamp(repo.complexityScore)}%` }}
                       />
                     </div>
 
-                    <div className="text-gray-500 text-[10px] mt-1">
-                      ★ {repo.stars}
-                    </div>
+                    <div className="text-gray-500 text-[10px] mt-1">★ {repo.stars}</div>
                   </div>
                 ))}
               </div>
@@ -312,14 +352,18 @@ export const GitHubAnalyzer: React.FC = () => {
                 </h4>
 
                 <div className="flex flex-wrap gap-2 mb-6">
-                  {data.technologies.map((tech) => (
-                    <span
-                      key={tech}
-                      className="bg-[#DEDBC8]/5 border border-[#DEDBC8]/10 text-[#DEDBC8]/80 text-xs rounded-full px-3 py-1"
-                    >
-                      {tech}
-                    </span>
-                  ))}
+                  {data.technologies.length > 0 ? (
+                    data.technologies.map((tech) => (
+                      <span
+                        key={tech}
+                        className="bg-[#DEDBC8]/5 border border-[#DEDBC8]/10 text-[#DEDBC8]/80 text-xs rounded-full px-3 py-1"
+                      >
+                        {tech}
+                      </span>
+                    ))
+                  ) : (
+                    <p className="text-gray-500 text-xs">No technology data</p>
+                  )}
                 </div>
 
                 <h4 className="text-[#DEDBC8]/50 font-mono text-[10px] tracking-widest uppercase mb-4">
@@ -335,7 +379,7 @@ export const GitHubAnalyzer: React.FC = () => {
                     <div className="flex-1 h-0.5 bg-white/5 rounded-full">
                       <div
                         className="h-0.5 bg-[#DEDBC8]/50 rounded-full transition-all duration-700"
-                        style={{ width: `${lang.percent}%` }}
+                        style={{ width: `${clamp(lang.percent)}%` }}
                       />
                     </div>
 
@@ -371,11 +415,11 @@ export const GitHubAnalyzer: React.FC = () => {
               <div className="bg-white/5 h-2 rounded-full mb-6">
                 <div
                   className="h-2 rounded-full bg-gradient-to-r from-[#DEDBC8]/40 to-[#DEDBC8] transition-all duration-700"
-                  style={{ width: `${avgComplexity}%` }}
+                  style={{ width: `${clamp(avgComplexity)}%` }}
                 />
               </div>
 
-              <div className="grid grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 {[
                   { label: "Code Quality", value: Math.round(avgComplexity * 0.9) },
                   { label: "Contribution", value: Math.round(avgComplexity * 0.85) },
@@ -404,4 +448,3 @@ export const GitHubAnalyzer: React.FC = () => {
     </section>
   );
 };
-</query>
