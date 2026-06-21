@@ -18,9 +18,9 @@ interface RepoData {
 
 interface ProfileData {
   login: string;
-  name: string;
+  name: string | null;
   avatarUrl: string;
-  bio: string;
+  bio: string | null;
   publicRepos: number;
   followers: number;
   following: number;
@@ -68,6 +68,7 @@ export const GitHubAnalyzer: React.FC = () => {
         return;
       }
       setData(json.data);
+      localStorage.setItem("lastAnalyzedGithubUsername", username.trim().toLowerCase());
     } catch (err: any) {
       if (err.message?.includes("fetch")) {
         setError("Cannot connect to backend. Make sure skill-tree-backend is running on port 3000.");
@@ -93,11 +94,11 @@ export const GitHubAnalyzer: React.FC = () => {
     }
     const total = Object.values(freq).reduce((s, v) => s + v, 0);
     return Object.entries(freq)
-      .map(([name, count]) => ({ name, count, percent: (count / total) * 100 }))
+      .map(([name, count]) => ({ name, count, percent: total ? (count / total) * 100 : 0 }))
       .sort((a, b) => b.percent - a.percent)
       .slice(0, 5);
   };
-
+  const languages = languageStats();
   const avgComplexity =
     data && data.repositories.length > 0
       ? Math.min(
@@ -233,7 +234,7 @@ export const GitHubAnalyzer: React.FC = () => {
                   ))}
                 </div>
                 <h4 className="text-[#DEDBC8]/50 font-mono text-[10px] tracking-widest uppercase mb-4">Language Breakdown</h4>
-                {languageStats().map((lang) => (
+                {languages.map((lang) => (
                   <div key={lang.name} className="flex items-center gap-3 mb-2">
                     <span className="text-gray-400 text-xs w-20 font-mono">{lang.name}</span>
                     <div className="flex-1 h-0.5 bg-white/5 rounded-full">
@@ -242,7 +243,7 @@ export const GitHubAnalyzer: React.FC = () => {
                     <span className="text-gray-500 text-[10px] font-mono w-8 text-right">{Math.round(lang.percent)}%</span>
                   </div>
                 ))}
-                {languageStats().length === 0 && (
+                {languages.length === 0 && (
                   <p className="text-gray-500 text-xs">No language data</p>
                 )}
               </div>

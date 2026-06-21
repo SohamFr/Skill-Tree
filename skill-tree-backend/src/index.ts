@@ -14,12 +14,30 @@ import wakatimeRouter from "./routes/wakatime";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:4173', 'http://localhost:3000'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:4173",
+  "http://localhost:3000",
+  process.env.FRONTEND_URL
+].filter(Boolean) as string[];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true
+  })
+);
+
 app.use(helmet());
 app.use(express.json());
 
@@ -28,12 +46,12 @@ const limiter = rateLimit({
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests, please try again later." },
+  message: { error: "Too many requests, please try again later." }
 });
 app.use(limiter);
 
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date() });
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
 app.use("/api/github", githubRouter);
@@ -41,18 +59,19 @@ app.use("/api/deployment", deploymentRouter);
 app.use("/api/ledger", ledgerRouter);
 app.use("/api/wakatime", wakatimeRouter);
 
-app.use((req: any, res: any) => {
+app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.path} not found` });
 });
 
-app.use((err: any, req: any, res: any, next: any) => {
-  console.error('Global error:', err.message);
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error("Global error:", err.message);
   res.status(err.status || 500).json({
-    error: err.message || 'Internal server error',
+    error: err.message || "Internal server error",
     timestamp: new Date().toISOString()
   });
 });
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log("Allowed origins:", allowedOrigins);
 });
