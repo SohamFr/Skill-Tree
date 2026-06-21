@@ -14,11 +14,13 @@ import wakatimeRouter from "./routes/wakatime";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const frontendUrl = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
+
 const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:4173",
   "http://localhost:3000",
-  process.env.FRONTEND_URL
+  frontendUrl,
 ].filter(Boolean) as string[];
 
 app.use(
@@ -34,7 +36,7 @@ app.use(
     },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
-    credentials: true
+    credentials: true,
   })
 );
 
@@ -46,8 +48,9 @@ const limiter = rateLimit({
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests, please try again later." }
+  message: { error: "Too many requests, please try again later." },
 });
+
 app.use(limiter);
 
 app.get("/health", (_req, res) => {
@@ -63,13 +66,20 @@ app.use((req, res) => {
   res.status(404).json({ error: `Route ${req.method} ${req.path} not found` });
 });
 
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error("Global error:", err.message);
-  res.status(err.status || 500).json({
-    error: err.message || "Internal server error",
-    timestamp: new Date().toISOString()
-  });
-});
+app.use(
+  (
+    err: any,
+    _req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction
+  ) => {
+    console.error("Global error:", err.message);
+    res.status(err.status || 500).json({
+      error: err.message || "Internal server error",
+      timestamp: new Date().toISOString(),
+    });
+  }
+);
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);

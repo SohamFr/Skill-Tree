@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { ExternalLink, Code, Globe, Activity, Zap } from "lucide-react";
 import { WordsPullUpMultiStyle } from "./WordsPullUpMultiStyle";
@@ -66,7 +66,34 @@ interface LedgerData {
   };
 }
 
+interface LedgerSuccessResponse {
+  success: true;
+  data: LedgerData;
+}
+
+interface LedgerErrorResponse {
+  success?: false;
+  error?: string;
+  details?: string;
+  suggestion?: string;
+}
+
+type LedgerResponse = LedgerSuccessResponse | LedgerErrorResponse | null;
+
+const parseJsonSafe = <T,>(text: string): T | null => {
+  try {
+    return text ? (JSON.parse(text) as T) : null;
+  } catch {
+    return null;
+  }
+};
+
+const clamp = (value: number, min = 0, max = 100) =>
+  Math.max(min, Math.min(max, value));
+
 export const ProofLedger: React.FC = () => {
+  const API_BASE = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,46 +101,100 @@ export const ProofLedger: React.FC = () => {
   const [copied, setCopied] = useState(false);
 
   const handleLoad = async () => {
-    if (!username.trim()) return;
+    const trimmedUsername = username.trim();
+    if (!trimmedUsername) return;
+
+    if (!API_BASE) {
+      setError("Frontend API base URL is not configured.");
+      return;
+    }
 
     setLoading(true);
     setError(null);
     setData(null);
 
     try {
-      const res = await fetch(`/api/ledger/${encodeURIComponent(username.trim())}`);
-      const json = await res.json();
+      const res = await fetch(
+        `${API_BASE}/api/ledger/${encodeURIComponent(trimmedUsername)}`
+      );
+
+      const text = await res.text();
+      const json = parseJsonSafe<LedgerResponse>(text);
 
       if (!res.ok) {
         if (res.status === 404) {
-          throw new Error(json.error || "Ledger not found. Analyze this profile first.");
+          setError(
+            (json && "error" in json && json.error) ||
+              "Ledger not found. Analyze this profile first."
+          );
+          return;
         }
 
         if (res.status === 503) {
-          throw new Error(json.error || "Database unavailable. Ledger cannot be loaded right now.");
+          setError(
+            (json && "error" in json && json.error) ||
+              "Database unavailable. Ledger cannot be loaded right now."
+          );
+          return;
         }
 
-        throw new Error(json.error || "Failed to load ledger");
+        setError(
+          (json && "error" in json && json.error) ||
+            `Failed to load ledger (${res.status})`
+        );
+        return;
       }
 
-      setData(json.success ? json.data : json);
-    } catch (err: any) {
-      setError(err.message || "Something went wrong");
+      if (!json || !("data" in json) || !json.data) {
+        setError("Backend returned an empty or invalid response.");
+        return;
+      }
+
+      setData(json.data);
+    } catch (err: unknown) {
+      if (err instanceof TypeError) {
+        setError("Cannot connect to backend.");
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Something went wrong");
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     if (!data) return;
-    navigator.clipboard.writeText(`https://skilltree.dev/proof/${data.developer.githubUsername}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+
+    const base =
+      typeof window !== "undefined" ? window.location.origin : "https://skilltree.dev";
+    const proofUrl = `${base}/proof/${data.developer.githubUsername}`;
+
+    try {
+      await navigator.clipboard.writeText(proofUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setError("Failed to copy link.");
+    }
   };
 
   const s = data?.stats;
   const dev = data?.developer;
   const topLang = s?.topLanguages[0]?.language || null;
+
+  const maxLanguageCount = useMemo(() => {
+    if (!s?.topLanguages?.length) return 1;
+    return Math.max(...s.topLanguages.map((l) => l.count), 1);
+  }, [s?.topLanguages]);
+
+  const proofUrl =
+    data && typeof window !== "undefined"
+      ? `${window.location.origin}/proof/${data.developer.githubUsername}`
+      : data
+      ? `https://skilltree.dev/proof/${data.developer.githubUsername}`
+      : "";
 
   return (
     <section id="ledger" className="bg-black py-24 px-4 md:px-8">
@@ -126,13 +207,17 @@ export const ProofLedger: React.FC = () => {
           <WordsPullUpMultiStyle
             segments={[
               { text: "Your verified", className: "text-[#DEDBC8] font-normal" },
-              { text: "developer identity.", className: "font-serif italic text-[#DEDBC8]" },
+              {
+                text: "developer identity.",
+                className: "font-serif italic text-[#DEDBC8]",
+              },
             ]}
             containerClassName="inline-flex flex-wrap text-3xl sm:text-4xl md:text-5xl lg:text-6xl mb-4 justify-center"
           />
 
           <p className="text-gray-500 text-sm md:text-base font-light mb-12">
-            Every skill, every commit, every deployment — cryptographically timestamped and publicly verifiable.
+            Every skill, every commit, every deployment — cryptographically
+            timestamped and publicly verifiable.
           </p>
 
           <div className="max-w-2xl mx-auto">
@@ -152,13 +237,16 @@ export const ProofLedger: React.FC = () => {
                 type="text"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleLoad()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleLoad();
+                }}
                 placeholder="Enter GitHub username"
                 className="flex-1 bg-transparent text-[#DEDBC8] text-sm placeholder:text-gray-600 outline-none px-2 py-3 font-mono"
               />
 
               <button
-                onClick={handleLoad}
+                type="button"
+                onClick={() => void handleLoad()}
                 disabled={loading || !username.trim()}
                 className="bg-[#DEDBC8] text-black font-semibold text-sm px-6 py-3 rounded-xl hover:bg-white transition-colors disabled:opacity-50"
               >
@@ -169,13 +257,14 @@ export const ProofLedger: React.FC = () => {
             {error && (
               <div className="mt-6 max-w-2xl mx-auto space-y-3">
                 <div className="bg-[#DEDBC8]/5 border border-[#DEDBC8]/10 rounded-2xl p-6 text-center">
-                  {error.includes("Database") ? (
+                  {error.toLowerCase().includes("database") ? (
                     <>
                       <p className="text-[#DEDBC8]/60 font-mono text-xs uppercase tracking-widest mb-2">
                         Database Unavailable
                       </p>
                       <p className="text-[#DEDBC8]/40 text-sm mb-4">
-                        Ledger data cannot be loaded right now because the database is unavailable.
+                        Ledger data cannot be loaded right now because the database
+                        is unavailable.
                       </p>
                       <p className="text-gray-600 text-xs font-mono">
                         Try again after the backend database connection is restored.
@@ -213,20 +302,27 @@ export const ProofLedger: React.FC = () => {
                 </span>
                 <div className="flex items-center gap-1.5">
                   <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
-                  <span className="text-[10px] font-mono text-green-400">VERIFIED</span>
+                  <span className="text-[10px] font-mono text-green-400">
+                    VERIFIED
+                  </span>
                 </div>
               </div>
 
               <div className="text-center mb-8 relative z-10">
                 <img
-                  src={dev?.avatarUrl || `https://avatars.githubusercontent.com/${dev?.githubUsername}`}
-                  alt={dev?.name || ""}
+                  src={
+                    dev?.avatarUrl ||
+                    `https://avatars.githubusercontent.com/${dev?.githubUsername}`
+                  }
+                  alt={dev?.name || dev?.githubUsername || "Developer avatar"}
                   className="w-20 h-20 rounded-full border-2 border-[#DEDBC8]/20 mx-auto mb-4"
                 />
                 <h3 className="text-[#E1E0CC] text-xl font-medium">
                   {dev?.name || dev?.githubUsername}
                 </h3>
-                <p className="text-gray-500 font-mono text-sm">@{dev?.githubUsername}</p>
+                <p className="text-gray-500 font-mono text-sm">
+                  @{dev?.githubUsername}
+                </p>
               </div>
 
               <div className="flex items-center justify-between relative z-10">
@@ -278,7 +374,9 @@ export const ProofLedger: React.FC = () => {
               <div className="bg-[#101010] border border-white/5 rounded-2xl p-6 shadow-2xl">
                 <Zap className="w-5 h-5 text-[#DEDBC8]/40 mb-3" />
                 <div className="text-3xl font-bold text-[#E1E0CC] font-mono">
-                  {s?.avgComplexityScore?.toFixed(1) ?? "0.0"}
+                  {typeof s?.avgComplexityScore === "number"
+                    ? s.avgComplexityScore.toFixed(1)
+                    : "0.0"}
                 </div>
                 <div className="text-[10px] text-gray-500 font-mono uppercase tracking-wider">
                   Avg Complexity
@@ -302,26 +400,27 @@ export const ProofLedger: React.FC = () => {
                   Top Languages
                 </div>
 
-                {s?.topLanguages.map((lang) => (
-                  <div key={lang.language} className="flex items-center gap-3 mb-3 last:mb-0">
+                {s?.topLanguages?.map((lang) => (
+                  <div
+                    key={lang.language}
+                    className="flex items-center gap-3 mb-3 last:mb-0"
+                  >
                     <span className="text-gray-400 text-xs w-24 font-mono truncate shrink-0">
                       {lang.language}
                     </span>
+
                     <div className="flex-1 h-0.5 bg-white/5 rounded-full">
                       <div
                         className="h-0.5 bg-[#DEDBC8]/50 rounded-full transition-all duration-700"
                         style={{
-                          width: `${
-                            Math.max(
-                              (lang.count /
-                                Math.max(...(s?.topLanguages?.map((l) => l.count) || [1]))) *
-                                100,
-                              5
-                            )
-                          }%`,
+                          width: `${Math.max(
+                            (lang.count / maxLanguageCount) * 100,
+                            5
+                          )}%`,
                         }}
                       />
                     </div>
+
                     <span className="text-gray-500 text-[10px] font-mono w-8 text-right">
                       {lang.count}
                     </span>
@@ -337,55 +436,68 @@ export const ProofLedger: React.FC = () => {
                 <div className="text-[#DEDBC8]/50 font-mono text-[10px] tracking-widest mb-4">
                   Recent Repositories
                 </div>
-                <div className="flex overflow-x-auto gap-3 pb-2" style={{ scrollbarWidth: "none" }}>
-                  {data.developer.repositories.map((repo) => (
-                    <a
-                      key={repo.id}
-                      href={repo.repoUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="bg-[#101010] rounded-xl p-4 w-56 shrink-0 border border-white/5 hover:border-white/20 transition-colors block"
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[#DEDBC8] text-sm font-mono truncate mr-2">
-                          {repo.repoName}
-                        </span>
-                        <ExternalLink className="w-3 h-3 text-gray-500 shrink-0" />
-                      </div>
 
-                      <div className="flex items-center gap-2 mb-3">
-                        {repo.language && (
-                          <span className="bg-[#DEDBC8]/10 text-[#DEDBC8] text-[10px] px-2 py-0.5 rounded-full">
-                            {repo.language}
+                <div
+                  className="flex overflow-x-auto gap-3 pb-2"
+                  style={{ scrollbarWidth: "none" }}
+                >
+                  {data.developer.repositories.length > 0 ? (
+                    data.developer.repositories.map((repo) => (
+                      <a
+                        key={repo.id}
+                        href={repo.repoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="bg-[#101010] rounded-xl p-4 w-56 shrink-0 border border-white/5 hover:border-white/20 transition-colors block"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-[#DEDBC8] text-sm font-mono truncate mr-2">
+                            {repo.repoName}
                           </span>
-                        )}
-                        <span className="text-gray-500 text-[10px]">★ {repo.stars}</span>
-                      </div>
+                          <ExternalLink className="w-3 h-3 text-gray-500 shrink-0" />
+                        </div>
 
-                      <div className="mt-2 h-0.5 bg-white/5 rounded-full">
-                        <div
-                          className="h-0.5 bg-[#DEDBC8]/60 rounded-full"
-                          style={{ width: `${Math.min(repo.complexity || 0, 100)}%` }}
-                        />
-                      </div>
-                    </a>
-                  ))}
+                        <div className="flex items-center gap-2 mb-3">
+                          {repo.language && (
+                            <span className="bg-[#DEDBC8]/10 text-[#DEDBC8] text-[10px] px-2 py-0.5 rounded-full">
+                              {repo.language}
+                            </span>
+                          )}
+                          <span className="text-gray-500 text-[10px]">
+                            ★ {repo.stars}
+                          </span>
+                        </div>
+
+                        <div className="mt-2 h-0.5 bg-white/5 rounded-full">
+                          <div
+                            className="h-0.5 bg-[#DEDBC8]/60 rounded-full"
+                            style={{
+                              width: `${clamp(repo.complexity || 0)}%`,
+                            }}
+                          />
+                        </div>
+                      </a>
+                    ))
+                  ) : (
+                    <p className="text-gray-500 text-xs">No repository data</p>
+                  )}
                 </div>
               </div>
             </div>
 
-            <div className="bg-[#101010] border border-[#DEDBC8]/10 rounded-2xl p-6 flex items-center justify-between shadow-2xl">
+            <div className="bg-[#101010] border border-[#DEDBC8]/10 rounded-2xl p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-2xl">
               <div>
                 <div className="font-mono text-[10px] tracking-widest text-[#DEDBC8]/50 mb-1">
                   SHAREABLE PROOF LINK
                 </div>
-                <div className="font-mono text-[#DEDBC8] text-sm">
-                  skilltree.dev/proof/{data.developer.githubUsername}
+                <div className="font-mono text-[#DEDBC8] text-sm break-all">
+                  {proofUrl}
                 </div>
               </div>
 
               <button
-                onClick={handleCopy}
+                type="button"
+                onClick={() => void handleCopy()}
                 className="bg-[#DEDBC8] text-black text-xs font-semibold px-4 py-2 rounded-lg hover:bg-white transition-colors"
               >
                 {copied ? "Copied!" : "Copy"}
