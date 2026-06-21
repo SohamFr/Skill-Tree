@@ -77,8 +77,8 @@ async function checkUrl(url: string): Promise<DeploymentCheckResult> {
         responseTime,
         finalUrl: response.request?.res?.responseUrl || url,
         isHttps: url.startsWith('https://'),
-        contentType: response.headers['content-type'] || '',
-        serverHeader: response.headers['server'] || '',
+        contentType: String(response.headers['content-type'] ?? ''),
+        serverHeader: String(response.headers['server'] ?? ''),
         method,
       };
     } catch (err: any) {
